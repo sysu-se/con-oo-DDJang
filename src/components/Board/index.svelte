@@ -1,10 +1,11 @@
 <script>
 	import { BOX_SIZE } from '@sudoku/constants';
 	import { gamePaused } from '@sudoku/stores/game';
-	import { grid, userGrid, invalidCells } from '@sudoku/stores/grid';
+	import { grid, invalidCells } from '@sudoku/stores/grid';
 	import { settings } from '@sudoku/stores/settings';
 	import { cursor } from '@sudoku/stores/cursor';
 	import { candidates } from '@sudoku/stores/candidates';
+	import { userGrid } from '@sudoku/stores/gameDomain';
 	import Cell from './Cell.svelte';
 
 	function isSelected(cursorStore, x, y) {
