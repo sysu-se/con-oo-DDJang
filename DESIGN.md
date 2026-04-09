@@ -44,7 +44,7 @@ Keyboard.svelte
                 ▼
            Game.guess({ row: y, col: x, value })
                 │
-                ├── 保存快照到 history
+                ├── 保存快照到 HistoryManager
                 └── 修改 Sudoku 棋盘数据
                          │
                          ▼
@@ -131,8 +131,8 @@ function createGameStore() {
 
 | 内部状态 | 原因 |
 |---------|------|
-| `Game.history` | UI 不需要知道历史细节，只需要能调用 undo/redo |
-| `Game.redoHistory` | 同上 |
+| `HistoryManager.history` | UI 不需要知道历史细节，只需要能调用 undo/redo |
+| `HistoryManager.redoHistory` | 同上 |
 | `Sudoku.grid` | 通过 `userGrid` store 间接暴露给 UI |
 
 ### 4. 如果不用 store，直接 mutate 内部对象，会出现什么问题？
@@ -153,19 +153,53 @@ currentSudoku.getGrid()[row][col] = value;
    - Svelte 没有检测到新的赋值操作
    - `$userGrid` 不会触发重新渲染
 
-3. 这就是为什么 `userGrid.set()` 内部使用了 `.update()` 返回一个新数组：
-   ```javascript
-   userGrid.update($userGrid => {
-     $userGrid[pos.y][pos.x] = value;  // 修改
-     return $userGrid;                // 返回同一个引用
-   });
-   ```
+---
 
-**解决方案：使用不可变更新模式或使用 store 的 `.set()`/`.update()` 方法**
+## 三、模块化架构
+
+### 文件结构
+
+```
+src/domain/
+├── index.js          # 统一导出入口
+├── sudoku.js         # 棋盘领域对象
+├── game.js           # 游戏领域对象
+├── history.js        # 历史管理
+├── validation.js     # 输入验证
+├── structure.js      # 数独结构验证
+└── serialization.js  # 序列化/反序列化
+```
+
+### 各模块职责
+
+| 模块 | 职责 | 导出 |
+|------|------|------|
+| `sudoku.js` | 棋盘数据、guess、clone、toJSON | `createSudoku`, `deepClone` |
+| `game.js` | 游戏流程、guess/undo/redo 协调 | `createGame` |
+| `history.js` | Undo/Redo 历史栈管理 | `createHistoryManager` |
+| `validation.js` | 输入参数校验 | `validateGrid`, `validateMove` |
+| `structure.js` | 数独规则结构验证 | `isValidSudokuStructure` |
+| `serialization.js` | JSON 序列化/反序列化 | `createSudokuFromJSON`, `createGameFromJSON` |
+
+### 模块依赖关系
+
+```
+validation.js
+      │
+      ▼
+sudoku.js ─────────────────────────┐
+      │                            │
+      ▼                            ▼
+game.js ◄──── history.js    serialization.js
+      │         │
+      │         │
+      ▼         ▼
+   index.js
+```
 
 ---
 
-## 三、改进说明
+## 四、改进说明
 
 ### 1. 相比 Homework 1，改进了什么？
 
@@ -174,26 +208,27 @@ currentSudoku.getGrid()[row][col] = value;
 | 领域对象只存在于测试中 | 创建 `gameDomain` store 真正接入 Svelte |
 | UI 直接操作旧 store | UI 通过 `gameDomain.guess()` 调用领域对象 |
 | Undo/Redo 按钮逻辑不连领域对象 | 按钮直接调用 `gameDomain.undo()/redo()` |
+| `getGrid()` 直接暴露内部引用 | 返回 `deepClone(grid)` 副本 |
+| `getSudoku()` 暴露内部 Sudoku 实例 | 返回 `currentSudoku.clone()` 副本 |
+| 没有输入验证 | 添加 `validateGrid()` 和 `validateMove()` |
+| 反序列化无校验 | 添加 JSON 结构校验 |
+| history 数组生命周期不清 | 使用 `deepClone()` 复制传入的 history |
+| 所有代码堆在一个文件 | 拆分为多个职责明确的模块 |
 
-### 2. 为什么 HW1 中的做法不足以支撑真实接入？
-
-HW1 只实现了领域对象的**独立可测试性**，但没有实现**与 Svelte 的集成**：
-
-- `Sudoku` / `Game` 是普通 JS 对象
-- Svelte 组件不知道它们的存在
-- UI 仍然使用旧的 `grid` store 直接操作数组
-
-### 3. 新设计的 trade-off
+### 2. 新设计的 trade-off
 
 | 优点 | 缺点 |
 |------|------|
 | 领域逻辑与 UI 分离，易于测试 | 多了一层 store，需要维护 |
 | Undo/Redo 逻辑集中在领域层 | 同步 userGrid 有一定性能开销（但可接受） |
 | 扩展性好，可以轻松替换底层实现 | - |
+| 封装性更好，内部状态不可直接修改 | - |
+| 输入校验更健壮 | - |
+| 模块边界清晰，便于维护和扩展 | - |
 
 ---
 
-## 四、技术架构图
+## 五、技术架构图
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -223,52 +258,77 @@ HW1 只实现了领域对象的**独立可测试性**，但没有实现**与 Sve
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      领域层                                 │
-│                   src/domain/index.js                        │
-│  ┌─────────────────┐        ┌─────────────────┐              │
-│  │    Sudoku       │        │     Game        │              │
-│  │  ├── getGrid()  │◄───────│  ├── guess()   │              │
-│  │  ├── guess()    │        │  ├── undo()     │              │
-│  │  ├── clone()    │        │  ├── redo()     │              │
-│  │  └── toJSON()   │        │  └── toJSON()   │              │
-│  └─────────────────┘        └─────────────────┘              │
+│                   src/domain/                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │  sudoku.js  │  │  game.js    │  │ history.js  │        │
+│  │  棋盘数据    │  │  游戏流程    │  │  历史管理    │        │
+│  └─────────────┘  └─────────────┘  └─────────────┘        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │validation.js│  │structure.js│  │serializat.js│        │
+│  │  输入校验    │  │  规则验证    │  │  序列化      │        │
+│  └─────────────┘  └─────────────┘  └─────────────┘        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 五、关键设计决策
+## 六、安全性设计
 
-### 1. 为什么使用 Store Adapter 模式？
+### 1. 输入验证
 
-作业推荐方案 A（Store Adapter），原因：
-- 不需要修改 `Sudoku` / `Game` 领域对象
-- 领域对象保持纯净（无 Svelte 依赖）
-- 可以独立测试领域逻辑
-- UI 层只需调用 store 方法，无需关心实现细节
+```javascript
+// validation.js
+function validateGrid(grid) {
+  // 检查是否是 9x9 数组
+  // 检查每个值是否在 0-9 范围内
+}
 
-### 2. 为什么 `guess` 后要同步 userGrid？
+function validateMove(move) {
+  // 检查 move 对象结构
+  // 检查坐标是否在 0-8 范围内
+  // 检查值是否在 0-9 范围内
+}
+```
 
-因为 `userGrid` 是 Svelte 响应式系统的数据源。当 `Game.guess()` 修改了内部 `Sudoku` 的 `grid` 数组后：
+### 2. 反序列化校验
 
-1. `Game` 的状态变了
-2. 但 Svelte 的响应式依赖是 `userGrid` store
-3. 所以必须显式同步到 `userGrid`，Svelte 才能检测到变化
+```javascript
+// serialization.js
+function createSudokuFromJSON(json) {
+  if (!json || typeof json !== 'object' || !Array.isArray(json.grid)) {
+    throw new Error('Invalid JSON: missing or invalid grid property');
+  }
+  return createSudoku(json.grid);
+}
+```
 
-### 3. 为什么不直接让 `Sudoku` 继承 Svelte store？
+### 3. 内部状态保护
 
-因为违反了**单一职责原则**和**依赖方向**：
+```javascript
+// sudoku.js
+getGrid() {
+  return deepClone(grid);  // 返回副本，防止外部修改
+}
 
-- 领域对象应该专注于业务逻辑
-- Svelte 是 UI 框架的响应式机制
-- 领域对象不应该依赖 UI 框架
+// game.js
+getSudoku() {
+  return currentSudoku.clone();  // 返回副本，防止外部绕过 history 管理
+}
+```
 
 ---
 
-## 六、文件清单
+## 七、文件清单
 
 | 文件路径 | 职责 |
 |---------|------|
-| `src/domain/index.js` | 核心领域对象（Sudoku, Game） |
+| `src/domain/sudoku.js` | 核心领域对象 - 棋盘 |
+| `src/domain/game.js` | 核心领域对象 - 游戏 |
+| `src/domain/history.js` | 历史管理 |
+| `src/domain/validation.js` | 输入验证 |
+| `src/domain/structure.js` | 数独结构验证 |
+| `src/domain/serialization.js` | 序列化/反序列化 |
+| `src/domain/index.js` | 统一导出入口 |
 | `src/node_modules/@sudoku/stores/gameDomain.js` | Store 适配层 |
 | `src/node_modules/@sudoku/game.js` | 游戏入口（startNew, startCustom） |
 | `src/components/Controls/ActionBar/Actions.svelte` | Undo/Redo 按钮 |
